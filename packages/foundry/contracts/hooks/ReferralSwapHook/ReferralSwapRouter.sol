@@ -1,6 +1,8 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 
 pragma solidity ^0.8.24;
+
+import "forge-std/Test.sol";
 
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -22,11 +24,11 @@ import {ReentrancyGuardTransient} from
 
 import {RouterCommon} from "@balancer-labs/v3-vault/contracts/RouterCommon.sol";
 
-abstract contract ReferalSwapRouter is RouterCommon, ReentrancyGuardTransient {
+abstract contract ReferralSwapRouter is RouterCommon, ReentrancyGuardTransient {
     using Address for address payable;
     using SafeCast for *;
 
-    struct ExtendedReferalSwapHookParams {
+    struct ExtendedReferralSwapHookParams {
         address sender;
         address receiver;
         SwapKind kind;
@@ -35,6 +37,7 @@ abstract contract ReferalSwapRouter is RouterCommon, ReentrancyGuardTransient {
         IERC20 tokenOut;
         uint256 amountGivenRaw;
         uint256 limitRaw;
+        bool wethIsEth;
         bytes userData;
     }
 
@@ -56,15 +59,14 @@ abstract contract ReferalSwapRouter is RouterCommon, ReentrancyGuardTransient {
         IERC20 tokenOut,
         uint256 amountGivenRaw,
         uint256 limitRaw,
+        bool wethIsEth,
         bytes memory userData
     ) internal saveSender returns (uint256 amountCalculatedRaw, uint256 amountInRaw, uint256 amountOutRaw) {
-      
-       
         (amountCalculatedRaw, amountInRaw, amountOutRaw) = abi.decode(
             _vault.unlock(
                 abi.encodeWithSelector(
-                    ReferalSwapRouter.referralSwap.selector,
-                    ExtendedReferalSwapHookParams({
+                    ReferralSwapRouter.referralSwap.selector,
+                    ExtendedReferralSwapHookParams({
                         sender: sender,
                         receiver: receiver,
                         pool: pool,
@@ -73,6 +75,7 @@ abstract contract ReferalSwapRouter is RouterCommon, ReentrancyGuardTransient {
                         amountGivenRaw: amountGivenRaw,
                         kind: kind,
                         limitRaw: limitRaw,
+                        wethIsEth: wethIsEth,
                         userData: userData
                     })
                 )
@@ -81,18 +84,15 @@ abstract contract ReferalSwapRouter is RouterCommon, ReentrancyGuardTransient {
         );
     }
 
-    function referralSwap(ExtendedReferalSwapHookParams calldata params)
+    function referralSwap(ExtendedReferralSwapHookParams calldata params)
         external
         nonReentrant
         onlyVault
         returns (uint256 amountCalculatedRaw, uint256 amountInRaw, uint256 amountOutRaw)
     {
-
         if (params.kind == SwapKind.EXACT_IN) {
-            // address(params.tokenIn).delegatecall(abi.encodeWithSelector(
-            //         IERC20.transfer.selector,address(_vault), params.amountGivenRaw));
-                params.tokenIn.transfer(address(_vault), params.amountGivenRaw);
-            _vault.settle(params.tokenIn, params.limitRaw);
+            RouterCommon._takeTokenIn(params.sender, params.tokenIn, params.amountGivenRaw, params.wethIsEth);
+
             (amountCalculatedRaw, amountInRaw, amountOutRaw) = _vault.swap(
                 VaultSwapParams({
                     kind: params.kind,
@@ -104,10 +104,12 @@ abstract contract ReferalSwapRouter is RouterCommon, ReentrancyGuardTransient {
                     userData: params.userData
                 })
             );
+            _vault.sendTo(params.tokenOut, params.sender, amountOutRaw);
         }
+
         if (params.kind == SwapKind.EXACT_OUT) {
-            params.tokenOut.transfer(address(_vault), params.amountGivenRaw);
-            _vault.settle(params.tokenOut, params.limitRaw);
+            RouterCommon._takeTokenIn(params.sender, params.tokenIn, params.amountGivenRaw, params.wethIsEth);
+
             (amountCalculatedRaw, amountInRaw, amountOutRaw) = _vault.swap(
                 VaultSwapParams({
                     kind: params.kind,
@@ -119,6 +121,7 @@ abstract contract ReferalSwapRouter is RouterCommon, ReentrancyGuardTransient {
                     userData: params.userData
                 })
             );
+            _vault.sendTo(params.tokenOut, params.sender, amountOutRaw);
         }
     }
 }

@@ -1,2 +1,0 @@
-users can swap through a swapLink which gives them the opportunity to win the fee that users payed for the swap so far.
-the link is provided by a referrer and the refeerer is also in charge for seting the hookfee. A share of the fee is going to be payed for the refferer and the rest will be transfered to the winner. Usually people use that swaplink to support the refferer ( can be a celebrity or a charity) and also there is a chance to win the collected fee.

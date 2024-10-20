@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
+
 import "forge-std/Test.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -24,17 +24,13 @@ import {
 import {BaseHooks} from "@balancer-labs/v3-vault/contracts/BaseHooks.sol";
 import {FixedPoint} from "@balancer-labs/v3-solidity-utils/contracts/math/FixedPoint.sol";
 
-import {ReferalSwapRouter} from "./ReferalSwapRouter.sol";
+import {ReferralSwapRouter} from "./ReferralSwapRouter.sol";
 
-/// @notice Mint an NFT to pool depositors, and charge a decaying exit fee upon withdrawal.
-contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
+/// @notice users can swap through a swapLink which gives them the opportunity to win the fee that users payed for the swap so far.
+contract ReferralSwapHook is ReferralSwapRouter, BaseHooks {
     using FixedPoint for uint256;
     using EnumerableMap for EnumerableMap.IERC20ToUint256Map;
     using SafeERC20 for IERC20;
-
-    // Trusted router is needed since we rely on `getSender` to know which user should receive the prize.
-    // address private immutable _trustedRouter;
-    // address private immutable _allowedFactory;
 
     // When calling `onAfterSwap`, a random number is generated. If the number is equal to LUCKY_NUMBER, the user will
     // win the accrued fees. It must be a number between 1 and MAX_NUMBER, or else nobody will win.
@@ -45,17 +41,10 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
     // This contract uses timestamps to update its withdrawal fee over time.
     //solhint-disable not-rely-on-time
 
-    // Initial fee of 10%.
-    // uint256 public constant INITIAL_FEE_PERCENTAGE = 10e16;
-    // uint256 public constant ONE_PERCENT = 1e16;
-
-    // NFT unique identifier.
-    uint256 private _nextTokenId;
-
     // Map of tokens with accrued fees.
     EnumerableMap.IERC20ToUint256Map private _tokensWithAccruedFees;
 
-    uint256 private _counter = 0;
+    uint256 public _counter = 0;
 
     mapping(address => bytes32) public referralLinks;
 
@@ -95,7 +84,7 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
      * @param token The token in which the fee was collected
      * @param feeAmount The amount of the fee collected
      */
-    event LotteryFeeCollected(address indexed hooksContract, IERC20 indexed token, uint256 feeAmount);
+    event ReferralSwapFeeCollected(address indexed hooksContract, IERC20 indexed token, uint256 feeAmount);
 
     /**
      * @notice Lottery proceeds were paid to a lottery winner.
@@ -104,7 +93,7 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
      * @param token The token in which winnings were paid
      * @param amountWon The amount of tokens won
      */
-    event LotteryWinningsPaid(
+    event ReferralSwapWinningsPaid(
         address indexed hooksContract, address indexed winner, IERC20 indexed token, uint256 amountWon
     );
 
@@ -118,32 +107,10 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
 
     /**
      * @notice Hooks functions called from an external router.
-     * @dev This contract inherits both `MinimalRouter` and `BaseHooks`, and functions as is its own router.
+     * @dev This contract inherits both `ReferralSwapRouter` and `BaseHooks`, and functions as is its own router.
      * @param router The address of the Router
      */
     error CannotUseExternalRouter(address router);
-
-    /**
-     * @notice The pool does not support adding liquidity through donation.
-     * @dev There is an existing similar error (IVaultErrors.DoesNotSupportDonation), but hooks should not throw
-     * "Vault" errors.
-     */
-    error PoolDoesNotSupportDonation();
-
-    /**
-     * @notice The pool supports adding unbalanced liquidity.
-     * @dev There is an existing similar error (IVaultErrors.DoesNotSupportUnbalancedLiquidity), but hooks should not
-     * throw "Vault" errors.
-     */
-    error PoolSupportsUnbalancedLiquidity();
-
-    /**
-     * @notice Attempted withdrawal of an NFT-associated position by an address that is not the owner.
-     * @param withdrawer The address attempting to withdraw
-     * @param owner The owner of the associated NFT
-     * @param nftId The id of the NFT
-     */
-    error WithdrawalByNonOwner(address withdrawer, address owner, uint256 nftId);
 
     modifier onlySelfRouter(address router) {
         _ensureSelfRouter(router);
@@ -155,7 +122,7 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
         _;
     }
 
-    constructor(IVault vault, IWETH weth, IPermit2 permit2) ReferalSwapRouter(vault, weth, permit2) {
+    constructor(IVault vault, IWETH weth, IPermit2 permit2) ReferralSwapRouter(vault, weth, permit2) {
         // solhint-disable-previous-line no-empty-blocks
     }
 
@@ -189,7 +156,6 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
         // might not settle. (It should be false if the after hooks do something else.)
         hookFlags.enableHookAdjustedAmounts = true;
         hookFlags.shouldCallAfterSwap = true;
-        // hookFlags.shouldCallComputeDynamicSwapFee = true;
         return hookFlags;
     }
 
@@ -205,13 +171,12 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
         IERC20 tokenOut,
         uint256 amountGivenRaw,
         uint256 limitRaw,
+        bool wethIsEth,
         bytes memory userData
     ) external payable saveSender returns (uint256 amountCalculatedRaw, uint256 amountInRaw, uint256 amountOutRaw) {
-    
-        console.log("alice balance!!!!!!!!!!!!!" , tokenIn.balanceOf(msg.sender));
-
-        (amountCalculatedRaw, amountInRaw, amountOutRaw) =
-            _swap(msg.sender, address(this), kind, pool, tokenIn, tokenOut, amountGivenRaw, limitRaw, userData);
+        (amountCalculatedRaw, amountInRaw, amountOutRaw) = _swap(
+            msg.sender, address(this), kind, pool, tokenIn, tokenOut, amountGivenRaw, limitRaw, wethIsEth, userData
+        );
 
         emit ReferalSwap(msg.sender, pool);
     }
@@ -221,27 +186,26 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
         public
         override
         onlySelfRouter(params.router)
-        onlyVault
         returns (bool success, uint256 hookAdjustedAmountCalculatedRaw)
     {
         bytes32 refLink_ = abi.decode(params.userData, (bytes32));
+
         require(referralFeePercentage[refLink_] > 0, "link is not valid");
+
         uint8 drawnNumber_;
-        // if (params.router == _trustedRouter) {
-        // If the router is trusted, draw a number as a lottery entry. (If router is not trusted, the user can
-        // perform swaps and contribute to the pot, but is not eligible to win.)
-        drawnNumber_ = _getRandomNumber();
-        // }
+
+        drawnNumber_ = getRandomNumber();
+
         address referrer_ = referrers[refLink_];
         require(referrer_ != address(0), "referrer is not valid");
 
-        // Increment the counter to help randomize the number drawn in the next swap.
-        _counter++;
-
         hookAdjustedAmountCalculatedRaw = params.amountCalculatedRaw;
-        uint256 referalHookSwapFeePercentage = referralFeePercentage[referralLinks[msg.sender]];
+
+        uint256 referalHookSwapFeePercentage = referralFeePercentage[refLink_];
+
         if (referalHookSwapFeePercentage > 0) {
             uint256 hookFee = hookAdjustedAmountCalculatedRaw.mulDown(referalHookSwapFeePercentage);
+
             if (params.kind == SwapKind.EXACT_IN) {
                 // For EXACT_IN swaps, the `amountCalculated` is the amount of `tokenOut`. The fee must be taken
                 // from `amountCalculated`, so we decrease the amount of tokens the Vault will send to the caller.
@@ -254,6 +218,7 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
 
                 uint256 feeToPay =
                     _chargeFeeOrPayWinner(referrer_, params.router, drawnNumber_, params.tokenOut, hookFee);
+
                 if (feeToPay > 0) {
                     hookAdjustedAmountCalculatedRaw -= feeToPay;
                 }
@@ -284,13 +249,19 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
      * function should not exist, or should return a different number every time, even if called in the same
      * transaction.
      *
-     * @return number A pseudo-random number
+     * @return number A pseudo-random number.for testing lucky occations it returns the LUCKY_NUMBER when counter is odd.
      */
-    function getRandomNumber() external view returns (uint8) {
+    function getRandomNumber() public returns (uint8) {
+        // Increment the counter to help randomize the number drawn in the next swap.
+        _counter++;
+
+        if (_counter % 2 == 0) {
+            return LUCKY_NUMBER;
+        }
         return _getRandomNumber();
     }
-
     // If drawnNumber == LUCKY_NUMBER, user wins the pot and pays no fees. Otherwise, the hook fee adds to the pot.
+
     function _chargeFeeOrPayWinner(address _referrer, address router, uint8 drawnNumber, IERC20 token, uint256 hookFee)
         private
         returns (uint256)
@@ -323,7 +294,7 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
 
                     feeToken.safeTransfer(_referrer, referrerAmount_);
 
-                    emit LotteryWinningsPaid(address(this), user, feeToken, amountWon_);
+                    emit ReferralSwapWinningsPaid(address(this), user, feeToken, amountWon_);
                 }
             }
             // Winner pays no fees.
@@ -336,7 +307,9 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
                 // Collect fees from the Vault; the user will pay them when the router settles the swap.
                 _vault.sendTo(token, address(this), hookFee);
 
-                emit LotteryFeeCollected(address(this), token, hookFee);
+                uint256 tokenbal = token.balanceOf(address(this));
+
+                emit ReferralSwapFeeCollected(address(this), token, hookFee);
             }
 
             return hookFee;
@@ -346,6 +319,7 @@ contract ReferralSwapHook is ReferalSwapRouter, BaseHooks {
     // Generates a "random" number from 1 to MAX_NUMBER.
     // Be aware that in real applications the random number must be generated with a help of an oracle, or some
     // other off-chain method. The output of this function is predictable on-chain.
+    //
     function _getRandomNumber() private view returns (uint8) {
         return uint8((uint256(keccak256(abi.encodePacked(block.prevrandao, _counter))) % MAX_NUMBER) + 1);
     }
